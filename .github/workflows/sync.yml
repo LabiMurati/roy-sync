@@ -1,8 +1,11 @@
 name: sync
 on:
-  schedule: [{ cron: "*/5 * * * *" }]
-  workflow_dispatch: {}
-concurrency: { group: sync, cancel-in-progress: false }
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: sync
+  cancel-in-progress: false
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -10,10 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+        with:
+          node-version: 22
       - run: npm install --no-audit --no-fund
-      - uses: actions/cache@v4
-        with: { path: ~/.cache/ms-playwright, key: pw-${{ runner.os }}-${{ hashFiles('package.json') }} }
       - run: npx playwright install --with-deps chromium
       - run: node scripts/bring-sync.mjs
-        env: { ROY_CLOUD: "${{ secrets.ROY_CLOUD }}" }
+        env:
+          ROY_CLOUD: ${{ secrets.ROY_CLOUD }}
