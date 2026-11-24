@@ -1,0 +1,2 @@
+{ "name": "roy-sync", "private": true, "type": "module",
+  "dependencies": { "@supabase/supabase-js": "^2.47.0", "playwright": "^1.65.1" } }
