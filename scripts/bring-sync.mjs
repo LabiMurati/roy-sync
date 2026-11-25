@@ -87,7 +87,14 @@ async function osCredentials() {
 
 // ---------- BringPlus ----------
 async function openCtx(headless) {
-  if (!CLOUD) return chromium.launchPersistentContext(PROFILE, { headless, viewport: { width: 1500, height: 1000 } });
+  if (!CLOUD) {
+    let err;
+    for (let i = 0; i < 4; i++) {
+      try { return await chromium.launchPersistentContext(PROFILE, { headless, viewport: { width: 1500, height: 1000 } }); }
+      catch (e) { err = e; await new Promise((r) => setTimeout(r, 3000)); }
+    }
+    throw err;
+  }
   const browser = await chromium.launch({ headless: true });
   const ctx = await browser.newContext({ storageState: CLOUD.state, viewport: { width: 1500, height: 1000 } });
   const close = ctx.close.bind(ctx); ctx.close = async () => { await close(); await browser.close(); };
@@ -244,7 +251,12 @@ async function main() {
   const { email, pass } = await osCredentials();
   const db = createClient(url, anon, { auth: { persistSession: false } });
   const { error: le } = await db.auth.signInWithPassword({ email, password: pass });
-  if (le) { try { execFileSync("security", ["delete-generic-password", "-a", "email", "-s", KEYCHAIN], { stdio: "ignore" }); } catch {} throw new Error("Hyrja në ROY OS dështoi (email/fjalëkalim). Nisni sërish për t'i shkruar."); }
+  if (le) {
+    const bad = le.status === 400 || /invalid login|invalid credentials/i.test(le.message || "");
+    if (!bad) throw new Error("Hyrja në ROY OS dështoi përkohësisht (rrjeti?): " + (le.message || "") + ". Do provohet sërish.");
+    try { execFileSync("security", ["delete-generic-password", "-a", "email", "-s", KEYCHAIN], { stdio: "ignore" }); } catch {}
+    throw new Error("Hyrja në ROY OS dështoi (email/fjalëkalim). Nisni sërish për t'i shkruar.");
+  }
   const { data: orgId } = await db.rpc("bootstrap_org"); if (!orgId) throw new Error("Nuk u gjet organizata.");
   const since = val("--since") ? toDate(val("--since")) : new Date(Date.now() - 3 * 864e5);
   const { data: prods } = await db.from("products").select("name,product_variants(id,archived)").eq("org_id", orgId).eq("archived", false).limit(2000);
@@ -252,7 +264,13 @@ async function main() {
   const out = { created: 0, updated: 0, skipped: 0, failed: [] }; const createdNow = new Set();
   for (const p of parcels) {
     const flow = FLOW[p.status]; const key = `bring:${p.id}`;
-    const { data: ex } = await db.from("orders").select("id,status").eq("org_id", orgId).or(`idempotency_key.eq.${key},tracking_number.eq.${p.id}`).limit(1).maybeSingle();
+    const sel = (cols) => db.from("orders").select(cols).eq("org_id", orgId).or(`idempotency_key.eq.${key},tracking_number.eq.${p.id}`).limit(1).maybeSingle();
+    let { data: ex, error: xe } = globalThis.__noBS ? await sel("id,status") : await sel("id,status,bring_status");
+    if (xe && /bring_status/.test(xe.message)) { globalThis.__noBS = true; ({ data: ex } = await sel("id,status")); }
+    if (ex && !DRY && !globalThis.__noBS && p.status && ex.bring_status !== p.status) {
+      const { error: be } = await db.rpc("bring_set_status", { p_order: ex.id, p_status: p.status });
+      if (be && !globalThis.__bsWarn) { globalThis.__bsWarn = true; console.log("Kujdes: statusi i BringPlus nuk u ruajt: " + be.message); }
+    }
     if (!flow) { out.skipped++; continue; }
     let id = ex?.id, status = ex?.status;
     // Keep "Realizuar sot" in step with BringPlus: a delivery dated today counts as today's, an older one is history.
@@ -277,7 +295,7 @@ async function main() {
       }
       const { data, error } = await db.rpc("create_order", { p_org: orgId, p_order: { customer_name: p.name, phone: p.phone || "-", address: p.address || "-", city: p.city || "-", country: p.country, channel: "manual", status: "confirmed", courier: "BringPlus", tracking_number: p.id, courier_cost: p.cost, shipping_price: Math.min(p.cost, p.total), idempotency_key: key },
         p_items: [{ ...(variant ? { variant_id: variant } : { product_name: p.product }), quantity: 1, unit_price: Math.round(Math.max(0, p.total - p.cost) * 100) / 100 }] });
-      if (error) { out.failed.push([p.id, error.message]); continue; } id = data; status = "confirmed"; out.created++; createdNow.add(p.id);
+      if (error) { out.failed.push([p.id, error.message]); continue; } id = data; status = "confirmed"; if (!globalThis.__noBS) await db.rpc("bring_set_status", { p_order: id, p_status: p.status }); out.created++; createdNow.add(p.id);
     }
     // move the order forward to match BringPlus (never backwards)
     for (const to of flow) {

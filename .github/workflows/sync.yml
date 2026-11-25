@@ -1,15 +1,21 @@
 name: sync
+# Runs 24/7 without the Mac. GitHub's own schedule is unreliable (it skips runs),
+# so each run stays alive ~5.5 hours, syncing BringPlus every 5 minutes, and then
+# starts the next run itself. The schedule below only revives the chain if it ever stops.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "17,47 * * * *"
   workflow_dispatch:
 concurrency:
   group: sync
   cancel-in-progress: false
+permissions:
+  contents: read
+  actions: write
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,6 +23,18 @@ jobs:
           node-version: 22
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
-      - run: node scripts/bring-sync.mjs
+      - name: Sync every 5 minutes for ~5.5 hours
         env:
           ROY_CLOUD: ${{ secrets.ROY_CLOUD }}
+        run: |
+          end=$(( $(date +%s) + 330*60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            started=$(date +%s)
+            timeout 240 node scripts/bring-sync.mjs || echo "Sinkronizimi dështoi këtë herë; provohet sërish pas 5 minutash."
+            sleep $(( 300 - ( $(date +%s) - started ) > 0 ? 300 - ( $(date +%s) - started ) : 5 ))
+          done
+      - name: Start the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run sync.yml --ref "${GITHUB_REF_NAME}"
