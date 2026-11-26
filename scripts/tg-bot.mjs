@@ -34,7 +34,8 @@ async function collectNews() {
   const trends = (t.match(/<item>[\s\S]*?<\/item>/g) ?? []).slice(0, 25).map((it) => tagOf(it, "title"));
   return { items, trends };
 }
-const localDay = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Belgrade", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const ymd = (d) => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Belgrade", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d).map((x) => [x.type, x.value])); return `${p.year}-${p.month}-${p.day}`; };
+const localDay = () => ymd(new Date());
 const localHour = () => Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Belgrade", hour: "2-digit", hour12: false }).format(new Date()));
 async function dailyResearch(db, token, chat) {
   const { items, trends } = await collectNews();
@@ -64,9 +65,10 @@ async function main() {
     if (Date.now() - lastResearchCheck > 10 * 60_000 && localHour() >= 8 && researchDay !== localDay()) { // once a day, from 08:00
       lastResearchCheck = Date.now();
       const since = new Date(Date.now() - 20 * 3600_000).toISOString();
-      const { data: done } = await db.from("ai_research").select("id, created_at").eq("org_id", orgId).gte("created_at", since).order("created_at", { ascending: false }).limit(1);
-      const doneToday = done?.[0] && new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Belgrade" }).format(new Date(done[0].created_at)) === localDay();
-      if (doneToday) researchDay = localDay();
+      const { data: done, error: rErr } = await db.from("ai_research").select("id, created_at").eq("org_id", orgId).gte("created_at", since).order("created_at", { ascending: false }).limit(1);
+      const doneToday = !!done?.[0] && ymd(new Date(done[0].created_at)) === localDay();
+      if (rErr) console.log("ROY AI kërkimi: kontrolli dështoi, provoj më vonë (" + String(rErr.message).slice(0, 60) + ")");
+      else if (doneToday) researchDay = localDay();
       else { const { data: { session } } = await db.auth.getSession(); if (await dailyResearch(db, session?.access_token, chat)) researchDay = localDay(); }
     }
     const u = await tg("getUpdates", { offset, timeout: 50, allowed_updates: ["message"] });
