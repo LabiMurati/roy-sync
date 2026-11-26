@@ -11,7 +11,7 @@ const APP = (CLOUD.app || process.env.ROY_APP_URL || "https://roy-jewelry-os.ver
 const TOKEN = CLOUD.kc?.tg_token; const EMAIL = CLOUD.kc?.email; const PASS = EMAIL ? CLOUD.kc?.[EMAIL] : "";
 const tg = (method, body) => fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(65_000) }).then((r) => r.json()).catch(() => null);
 
-const HELP = "👋 Jam ROY AI. Më shkruani çdo pyetje për biznesin, p.sh.:\n• Sa shita sot / këtë javë?\n• Cili produkt po shitet më shumë?\n• Cili qytet refuzon më shumë?\n• Çfarë të reklamoj këtë javë dhe me sa para?\n• Më shkruaj një caption për Instagram për Unaze Bow\n• Çfarë duhet të porosis nga Kina?\n\n/harro — nis bisedë të re";
+const HELP = "👋 Jam ROY AI. Më shkruani çdo pyetje për biznesin, p.sh.:\n• Sa shita sot / këtë javë?\n• Cili produkt po shitet më shumë?\n• Cili qytet refuzon më shumë?\n• Çfarë të reklamoj këtë javë dhe me sa para?\n• Më shkruaj një caption për Instagram për Unaze Bow\n• Çfarë duhet të porosis nga Kina?\n\nNë grup shkruani: /p pyetja (ose bëni Reply mesazhit tim).\n/harro — nis bisedë të re";
 
 async function main() {
   if (!TOKEN || !EMAIL || !PASS) { console.log("ROY AI bot: mungon Telegram ose hyrja."); return; }
@@ -36,7 +36,8 @@ async function main() {
       if (/^\/ai(@\w+)?$/i.test(text)) continue; // the link command, handled by the sync
       if (/^\/(start|ndihme|help)(@\w+)?$/i.test(text)) { await tg("sendMessage", { chat_id: chat, text: HELP }); continue; }
       if (/^\/harro(@\w+)?$/i.test(text)) { history.delete(chat); await tg("sendMessage", { chat_id: chat, text: "🧹 U nis bisedë e re." }); continue; }
-      const q = text.replace(/^@\w+\s*/, "");
+      const q = text.replace(/^\/(p|pyet|q)(@\w+)?\s*/i, "").replace(/^@\w+\s*/, "");
+      if (!q) { await tg("sendMessage", { chat_id: chat, text: "Shkruani pyetjen pas /p, p.sh. /p sa shita sot?" }); continue; }
       const turns = [...(history.get(chat) ?? []), { role: "user", text: q }].slice(-10);
       await tg("sendChatAction", { chat_id: chat, action: "typing" });
       const typing = setInterval(() => tg("sendChatAction", { chat_id: chat, action: "typing" }), 4500);
