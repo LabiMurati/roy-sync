@@ -24,7 +24,7 @@ const PROFILE = join(homedir(), ".roy-bring-profile");
 const KEYCHAIN = "roy-os-sync";
 // Cloud mode (GitHub Actions): everything comes from one secret ROY_CLOUD (base64 JSON), nothing from this Mac's Keychain/profile.
 const CLOUD = process.env.ROY_CLOUD ? JSON.parse(Buffer.from(process.env.ROY_CLOUD, "base64").toString("utf8")) : null;
-if (CLOUD) { const _log = console.log; console.log = (...a) => { const t = String(a[0] ?? ""); if (/^(Përfundoi|Gabim|Pagesat|Kujdes|BringPlus:|\d+ njoftime|Një sinkronizim)/.test(t)) _log(...a); }; } // keep customer names out of public logs
+if (CLOUD) { const _log = console.log; console.log = (...a) => { const t = String(a[0] ?? ""); if (/^(Përfundoi|Gabim|Pagesat|Kujdes|BringPlus:|\d+ njoftime|Një sinkronizim|Përmbledhja)/.test(t)) _log(...a); }; } // keep customer names out of public logs
 const POSTAGE = [[/koso/i, "Kosovë", 2.5], [/alban|shqip/i, "Shqipëri", 6], [/macedon|maqed/i, "Maqedoni e Veriut", 6]];
 const COUNTRY_BY_FLAG = (alt) => (POSTAGE.find(([re]) => re.test(alt)) ?? [null, "Kosovë", 2.5]).slice(1);
 // BringPlus status -> how far the order should go in ROY OS. null = do not import.
@@ -372,6 +372,52 @@ async function main() {
     await emit({ id: "payout" + q.id }, msg);
   }
   for (const n of removedNotes) await emit({ id: n[0] }, n);
+  // Evening summary on Telegram, once a day: the first sync (GitHub or Mac) after SUMMARY_HOUR sends it.
+  const SUMMARY_HOUR = 21;
+  const berlinHour = Number(new Date().toLocaleString("en-GB", { hour: "2-digit", hour12: false, timeZone: "Europe/Berlin" }));
+  let testKey = ""; try { testKey = readFileSync(new URL("../summary-test.txt", import.meta.url), "utf8").trim().slice(0, 40); } catch {}
+  if (!DRY && (berlinHour >= SUMMARY_HOUR || testKey)) {
+    try { await dailySummary(testKey && berlinHour < SUMMARY_HOUR ? testKey : ""); } catch (e) { console.log("Kujdes: përmbledhja e ditës dështoi: " + e.message); }
+  }
+  async function dailySummary(test) {
+    const berlinDay = (d) => new Date(d).toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" });
+    const localDay = (d) => d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` : ""; // BringPlus dates (no time)
+    const today = berlinDay(new Date());
+    const money = (v) => v.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+    const sum = (xs, f) => xs.reduce((a, x) => a + f(x), 0);
+    const since30h = new Date(Date.now() - 30 * 3600e3).toISOString();
+    // new parcels registered today in BringPlus
+    const fresh = parcels.filter((p) => localDay(p.created) === today);
+    // delivered today, counted exactly like the Dashboard card "Të dorëzuara sot"
+    const { data: dl } = await db.from("order_status_history").select("order_id,note,created_at,orders!inner(total,status)").eq("org_id", orgId).eq("to_status", "delivered").gte("created_at", since30h).limit(2000);
+    const delivered = new Map(); for (const h of dl ?? []) if (berlinDay(h.created_at) === today && h.note !== "BringPlus (histori)" && h.orders?.status !== "cancelled") delivered.set(h.order_id, Number(h.orders?.total ?? 0));
+    // refused / returned today: the time the sync first saw that status
+    const { data: st } = await db.from("orders").select("total,bring_status,bring_status_at").eq("org_id", orgId).not("bring_status", "is", null).gte("bring_status_at", since30h).limit(2000);
+    const seenToday = (re) => (st ?? []).filter((o) => re.test(o.bring_status) && berlinDay(o.bring_status_at) === today);
+    const refused = seenToday(/refuzuar/i), returned = seenToday(/^E kthyer$/i);
+    // money BringPlus holds for you: delivered but not yet paid out (parcel value minus BringPlus' postage)
+    const owed = parcels.filter((p) => p.status === "E dorëzuar" || p.status === "Gati për likuidim");
+    const owedSum = sum(owed, (p) => Math.max(0, p.total - p.cost));
+    const pending = payouts.filter((q) => q.status && !/pranuar/i.test(q.status));
+    const count = (st2) => parcels.filter((p) => p.status === st2).length;
+    const label = new Date().toLocaleDateString("sq-AL", { weekday: "long", day: "numeric", month: "long", timeZone: "Europe/Berlin" });
+    const lines = [
+      `🆕 Porosi të reja: ${fresh.length}${fresh.length ? ` · ${money(sum(fresh, (p) => p.total))}` : ""}`,
+      `✅ Të dorëzuara: ${delivered.size}${delivered.size ? ` · ${money([...delivered.values()].reduce((a, b) => a + b, 0))}` : ""}`,
+      `❌ Të refuzuara: ${refused.length}${refused.length ? ` · ${money(sum(refused, (o) => Number(o.total)))}` : ""}`,
+      ...(returned.length ? [`↩️ Të kthyera: ${returned.length} · ${money(sum(returned, (o) => Number(o.total)))}`] : []),
+      "",
+      `🚚 Në shpërndarje tani: ${count("Në shpërndarje")}`,
+      ...(count("Problematike") + count("Për refuzim") ? [`⚠️ Kërkojnë vëmendje: ${count("Problematike")} problematike, ${count("Për refuzim")} për refuzim`] : []),
+      "",
+      `💶 Te BringPlus (dorëzuara, ende pa u paguar): ${money(owedSum)} nga ${owed.length} dërgesa (afërsisht, pa postën)`,
+      ...pending.map((q) => `   Pagesa ${q.id}: ${q.amount} · ${q.status}`),
+    ];
+    const title = test ? `Përmbledhja e ditës (provë) · ${label}` : `Përmbledhja e ditës · ${label}`;
+    const { data: isNew, error } = await db.rpc("bring_notify", { p_org: orgId, p_key: test ? `summary-test:${test}` : `summary:${today}`, p_title: title, p_body: lines.join("\n"), p_sev: "info" });
+    if (error) throw new Error(error.message);
+    if (isNew) { await tgSend(`${title}\n\n${lines.join("\n")}`); console.log("Përmbledhja e ditës u dërgua."); }
+  }
   if (alerts) console.log(`${alerts} njoftime të reja u shtuan te ROY OS.`);
   for (const t of toPhone.slice(0, 15)) await tgSend(t);
   if (toPhone.length > 15) await tgSend(`... dhe edhe ${toPhone.length - 15} njoftime të tjera te ROY OS.`);
