@@ -39,8 +39,9 @@ function env() {
 }
 const kc = (acct) => { if (CLOUD) return CLOUD.kc?.[acct] ?? ""; try { return execFileSync("security", ["find-generic-password", "-a", acct, "-s", KEYCHAIN, "-w"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch { return ""; } };
 const kcSet = (acct, v) => spawnSync("security", ["add-generic-password", "-U", "-a", acct, "-s", KEYCHAIN, "-w", v], { stdio: "ignore" }).status === 0;
-async function tgSend(text) {
-  const token = kc("tg_token"), chat = kc("tg_chat"); if (!token || !chat) return false;
+/** Sends to the work chat by default; pass a chat id to send elsewhere (the AI chat). */
+async function tgSend(text, toChat) {
+  const token = kc("tg_token"), chat = toChat || kc("tg_chat"); if (!token || !chat) return false;
   try { const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chat_id: chat, text: text.slice(0, 3500) }) }); return r.ok; } catch { return false; }
 }
 async function setupTelegram() {
@@ -171,6 +172,22 @@ async function history() {
   const db = createClient(url, anon, { auth: { persistSession: false } });
   const { error: le } = await db.auth.signInWithPassword({ email, password: pass }); if (le) throw new Error("Hyrja në ROY OS dështoi.");
   const { data: orgId } = await db.rpc("bootstrap_org"); if (!orgId) throw new Error("Nuk u gjet organizata.");
+  // Second Telegram chat for AI messages. The owner creates a group, adds the bot and writes /ai there; the sync links it once.
+  let aiChat = null;
+  try { const { data: st } = await db.from("organization_settings").select("telegram_ai_chat").eq("org_id", orgId).maybeSingle(); aiChat = st?.telegram_ai_chat || null; } catch {}
+  if (!aiChat && !DRY) { try { aiChat = await linkAiChat(); } catch {} }
+  const tgAI = (text) => tgSend(text, aiChat || undefined);
+  async function linkAiChat() {
+    const token = kc("tg_token"), ops = kc("tg_chat"); if (!token) return null;
+    const u = await fetch(`https://api.telegram.org/bot${token}/getUpdates?allowed_updates=${encodeURIComponent('["message","channel_post"]')}`).then((r) => r.json()).catch(() => null);
+    const hit = (u?.result ?? []).map((x) => x.message || x.channel_post).filter((m) => m && /^\/ai(@\w+)?\b/i.test(m.text || "") && String(m.chat?.id) !== String(ops)).pop();
+    if (!hit) return null;
+    const chat = String(hit.chat.id);
+    const { error } = await db.rpc("set_telegram_ai_chat", { p_org: orgId, p_chat: chat }); if (error) return null;
+    await tgSend("✅ Ky chat u lidh si kanali i AI i ROY JEWELRY OS.\nKëtu vijnë: plani i marketingut çdo të hënë (Instagram, Facebook, TikTok, buxheti), krahasimi i muajve më 1 të muajit dhe idetë e AI.", chat);
+    await tgSend("ℹ️ Mesazhet e AI tani shkojnë në chatin e ri. Këtu mbeten porositë, dërgesat, komentet dhe përmbledhja e mbrëmjes.");
+    return chat;
+  }
   const norm = (t) => (t ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
   const digits = (t) => String(t ?? "").replace(/\D/g, "").slice(-8);
   const { data: existing } = await db.from("orders").select("id,phone,customer_name,total,status,tracking_number,idempotency_key").eq("org_id", orgId).limit(5000);
@@ -405,7 +422,7 @@ async function main() {
   // the sync only asks for it with the owner's own session and forwards it to Telegram.
   let weeklyTest = ""; try { weeklyTest = readFileSync(new URL("../weekly-test.txt", import.meta.url), "utf8").trim().slice(0, 40); } catch {}
   const berlinDow = new Date().toLocaleDateString("en-GB", { weekday: "short", timeZone: "Europe/Berlin" });
-  if (!DRY && ((berlinDow === "Mon" && berlinHour >= 8) || weeklyTest)) {
+  if (!DRY && ((berlinDow === "Mon" && berlinHour >= 8) || (weeklyTest && aiChat))) { // a test waits until the AI chat is linked
     try { await weeklyAdvice(berlinDow === "Mon" && berlinHour >= 8 ? "" : weeklyTest); } catch (e) { console.log("Kujdes: këshilla e javës dështoi: " + e.message); }
   }
   // Monthly AI comparison: on the 1st after 09:00, the month that just ended vs the one before (once). AI runs inside ROY OS.
@@ -430,7 +447,7 @@ async function main() {
     const title = `Krahasimi i muajve${test ? " (provë)" : ""}: ${j.a?.period ?? month} vs ${j.b?.period ?? vs}`;
     const { data: isNew, error } = await db.rpc("bring_notify", { p_org: orgId, p_key: key, p_title: title, p_body: String(j.text).slice(0, 1500), p_sev: "info" });
     if (error) throw new Error(error.message);
-    if (isNew) { await tgSend(`📊 ${title}\n\n${j.text}`); console.log("Përmbledhja: krahasimi i muajve u dërgua."); }
+    if (isNew) { await tgAI(`📊 ${title}\n\n${j.text}`); console.log("Përmbledhja: krahasimi i muajve u dërgua."); }
   }
   async function weeklyAdvice(test) {
     const monday = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" });
@@ -443,10 +460,10 @@ async function main() {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.text) throw new Error(j.error || `HTTP ${r.status}`);
     const label = new Date().toLocaleDateString("sq-AL", { day: "numeric", month: "long", timeZone: "Europe/Berlin" });
-    const title = `Këshilla e javës${test ? " (provë)" : ""} · ${label}`;
+    const title = `Plani i marketingut të javës${test ? " (provë)" : ""} · ${label}`;
     const { data: isNew, error } = await db.rpc("bring_notify", { p_org: orgId, p_key: key, p_title: title, p_body: String(j.text).slice(0, 1500), p_sev: "info" });
     if (error) throw new Error(error.message);
-    if (isNew) { await tgSend(`🧠 ${title}\n\n${j.text}`); console.log("Përmbledhja: këshilla e javës u dërgua."); }
+    if (isNew) { await tgAI(`🧠 ${title}\n\n${j.text}`); console.log("Përmbledhja: këshilla e javës u dërgua."); }
   }
   async function dailySummary(test) {
     const berlinDay = (d) => new Date(d).toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" });
