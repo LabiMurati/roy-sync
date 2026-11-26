@@ -44,7 +44,7 @@ async function main() {
       let reply;
       try {
         const { data: { session } } = await db.auth.getSession();
-        const r = await fetch(`${APP}/api/ai/ask`, { method: "POST", headers: { Authorization: `Bearer ${session?.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ history: turns }), signal: AbortSignal.timeout(70_000) });
+        const r = await fetch(`${APP}/api/ai/ask`, { method: "POST", headers: { Authorization: `Bearer ${session?.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ history: turns, from: m.from?.first_name || "", channel: "telegram" }), signal: AbortSignal.timeout(70_000) });
         const j = await r.json().catch(() => ({}));
         reply = j.text || `⚠️ Nuk mora përgjigje (${j.error || "HTTP " + r.status}). Provoni sërish pas pak.`;
         if (j.text) history.set(chat, [...turns, { role: "assistant", text: j.text }].slice(-10));
