@@ -408,6 +408,30 @@ async function main() {
   if (!DRY && ((berlinDow === "Mon" && berlinHour >= 8) || weeklyTest)) {
     try { await weeklyAdvice(berlinDow === "Mon" && berlinHour >= 8 ? "" : weeklyTest); } catch (e) { console.log("Kujdes: këshilla e javës dështoi: " + e.message); }
   }
+  // Monthly AI comparison: on the 1st after 09:00, the month that just ended vs the one before (once). AI runs inside ROY OS.
+  let monthlyTest = ""; try { monthlyTest = readFileSync(new URL("../monthly-test.txt", import.meta.url), "utf8").trim().slice(0, 40); } catch {}
+  const berlinDay = Number(new Date().toLocaleDateString("en-GB", { day: "numeric", timeZone: "Europe/Berlin" }));
+  if (!DRY && ((berlinDay === 1 && berlinHour >= 9) || monthlyTest)) {
+    try { await monthlyCompare(berlinDay === 1 && berlinHour >= 9 ? "" : monthlyTest); } catch (e) { console.log("Kujdes: krahasimi i muajve dështoi: " + e.message); }
+  }
+  async function monthlyCompare(test) {
+    const [y, m] = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" }).split("-").map(Number);
+    const ymOf = (yy, mm) => { const d = new Date(Date.UTC(yy, mm - 1, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
+    // real run: last month vs the month before it; test: this month so far vs the same days of last month
+    const month = test ? ymOf(y, m) : ymOf(y, m - 1), vs = test ? ymOf(y, m - 1) : ymOf(y, m - 2);
+    const key = test ? `monthly-test:${test}` : `monthly:${month}`;
+    const { data: done } = await db.from("notifications").select("id").eq("org_id", orgId).eq("dedupe_key", key).limit(1);
+    if (done?.length) return;
+    const { data: { session } } = await db.auth.getSession(); if (!session) throw new Error("pa sesion");
+    const app = (CLOUD?.app || process.env.ROY_APP_URL || "https://roy-jewelry-os.vercel.app").replace(/\/$/, "");
+    const r = await fetch(`${app}/api/ai/months`, { method: "POST", headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ month, vs }), signal: AbortSignal.timeout(70_000) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.text) throw new Error(j.error || `HTTP ${r.status}`);
+    const title = `Krahasimi i muajve${test ? " (provë)" : ""}: ${j.a?.period ?? month} vs ${j.b?.period ?? vs}`;
+    const { data: isNew, error } = await db.rpc("bring_notify", { p_org: orgId, p_key: key, p_title: title, p_body: String(j.text).slice(0, 1500), p_sev: "info" });
+    if (error) throw new Error(error.message);
+    if (isNew) { await tgSend(`📊 ${title}\n\n${j.text}`); console.log("Përmbledhja: krahasimi i muajve u dërgua."); }
+  }
   async function weeklyAdvice(test) {
     const monday = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" });
     const key = test ? `weekly-test:${test}` : `weekly:${monday}`;
