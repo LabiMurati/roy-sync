@@ -30,6 +30,8 @@ jobs:
         env:
           ROY_CLOUD: ${{ secrets.ROY_CLOUD }}
         run: |
+          # ROY AI chat bot: answers questions in the "ROY AI" Telegram group while this run is alive
+          BOT_MINUTES=328 node scripts/tg-bot.mjs &
           end=$(( $(date +%s) + 330*60 ))
           while [ "$(date +%s)" -lt "$end" ]; do
             started=$(date +%s)
