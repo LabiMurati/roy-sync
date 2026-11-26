@@ -401,6 +401,29 @@ async function main() {
   if (!DRY && (berlinHour >= SUMMARY_HOUR || testKey)) {
     try { await dailySummary(testKey && berlinHour < SUMMARY_HOUR ? testKey : ""); } catch (e) { console.log("Kujdes: përmbledhja e ditës dështoi: " + e.message); }
   }
+  // Weekly AI advice: every Monday after 08:00, once a week. The AI runs inside ROY OS (Vercel holds the Gemini key);
+  // the sync only asks for it with the owner's own session and forwards it to Telegram.
+  let weeklyTest = ""; try { weeklyTest = readFileSync(new URL("../weekly-test.txt", import.meta.url), "utf8").trim().slice(0, 40); } catch {}
+  const berlinDow = new Date().toLocaleDateString("en-GB", { weekday: "short", timeZone: "Europe/Berlin" });
+  if (!DRY && ((berlinDow === "Mon" && berlinHour >= 8) || weeklyTest)) {
+    try { await weeklyAdvice(berlinDow === "Mon" && berlinHour >= 8 ? "" : weeklyTest); } catch (e) { console.log("Kujdes: këshilla e javës dështoi: " + e.message); }
+  }
+  async function weeklyAdvice(test) {
+    const monday = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" });
+    const key = test ? `weekly-test:${test}` : `weekly:${monday}`;
+    const { data: done } = await db.from("notifications").select("id").eq("org_id", orgId).eq("dedupe_key", key).limit(1);
+    if (done?.length) return; // already sent this week (or this test)
+    const { data: { session } } = await db.auth.getSession(); if (!session) throw new Error("pa sesion");
+    const app = (CLOUD?.app || process.env.ROY_APP_URL || "https://roy-jewelry-os.vercel.app").replace(/\/$/, "");
+    const r = await fetch(`${app}/api/ai/weekly`, { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, signal: AbortSignal.timeout(70_000) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.text) throw new Error(j.error || `HTTP ${r.status}`);
+    const label = new Date().toLocaleDateString("sq-AL", { day: "numeric", month: "long", timeZone: "Europe/Berlin" });
+    const title = `Këshilla e javës${test ? " (provë)" : ""} · ${label}`;
+    const { data: isNew, error } = await db.rpc("bring_notify", { p_org: orgId, p_key: key, p_title: title, p_body: String(j.text).slice(0, 1500), p_sev: "info" });
+    if (error) throw new Error(error.message);
+    if (isNew) { await tgSend(`🧠 ${title}\n\n${j.text}`); console.log("Përmbledhja: këshilla e javës u dërgua."); }
+  }
   async function dailySummary(test) {
     const berlinDay = (d) => new Date(d).toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" });
     const localDay = (d) => d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` : ""; // BringPlus dates (no time)
