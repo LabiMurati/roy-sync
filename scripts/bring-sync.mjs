@@ -262,6 +262,22 @@ async function main() {
   const { data: prods } = await db.from("products").select("name,product_variants(id,archived)").eq("org_id", orgId).eq("archived", false).limit(2000);
   const byName = new Map(); for (const p of prods ?? []) { const v = (p.product_variants ?? []).find((x) => !x.archived); if (v) byName.set(p.name.trim().toLowerCase(), v.id); }
   const out = { created: 0, updated: 0, skipped: 0, failed: [] }; const createdNow = new Set(); const seenAt = new Map(), prevStatus = new Map();
+  async function returnOrder(orderId, status) {
+    if (!["shipped", "delivered"].includes(status)) {
+      const { error } = await db.rpc("set_order_status", { p_order: orderId, p_to: "shipped", p_note: "BringPlus" });
+      if (error) return error.message;
+    }
+    const { data: items, error: ie } = await db.from("order_items").select("id,shipped_qty,returned_qty").eq("order_id", orderId);
+    if (ie) return ie.message;
+    let done = 0;
+    for (const it of items ?? []) {
+      const qty = (it.shipped_qty ?? 0) - (it.returned_qty ?? 0); if (qty <= 0) continue;
+      const { error } = await db.rpc("receive_return", { p_item: it.id, p_qty: qty, p_sellable: true });
+      if (error) return error.message; done++;
+    }
+    if (!done) { const { error } = await db.rpc("set_order_status", { p_order: orderId, p_to: "returned", p_note: "BringPlus: E kthyer" }); if (error) return error.message; }
+    return null;
+  }
   // BringPlus status + the time BringPlus set it (falls back to the older 2-argument function if the database isn't updated yet).
   async function setBring(orderId, p) {
     if (!globalThis.__noBSAt) {
@@ -283,6 +299,12 @@ async function main() {
     if (ex && !DRY && !globalThis.__noBS && p.status && (ex.bring_status !== p.status || (!globalThis.__noBSAt && !ex.bring_status_at))) {
       const { error: be } = await setBring(ex.id, p);
       if (be && !globalThis.__bsWarn) { globalThis.__bsWarn = true; console.log("Kujdes: statusi i BringPlus nuk u ruajt: " + be.message); }
+    }
+    // Returned in BringPlus ("E kthyer"): mark the order returned in ROY OS and put the items back in stock,
+    // so it stops counting as a sale. Uses the app's own return function (same as the "Kthim" button).
+    if (ex && p.status === "E kthyer" && !["returned", "partially_returned", "cancelled"].includes(ex.status)) {
+      console.log(`${DRY ? "[prova] " : ""}~ ${p.id} -> returned (E kthyer)`);
+      if (!DRY) { const err = await returnOrder(ex.id, ex.status); if (err) out.failed.push([p.id, "kthimi: " + err]); else out.updated++; }
     }
     if (!flow) { out.skipped++; continue; }
     let id = ex?.id, status = ex?.status;
