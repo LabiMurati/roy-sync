@@ -15,10 +15,11 @@ const HELP = "👋 Jam ROY AI. Më shkruani çdo pyetje për biznesin, p.sh.:\n�
 
 
 // ---------- Daily market research (rings, Pandora-style, sets, bracelets) ----------
-const NEWS = [ // Kosovo and Albania first; a few global jewelry queries only as inspiration
-  ["bizhuteri", "sq"], ["unaza", "sq"], ["Pandora", "sq"], ["byzylyk", "sq"], ["dhurata", "sq"], ["Black Friday Kosovë", "sq"],
-  ["oferta Prishtinë", "sq"], ["Tiranë dyqan online", "sq"], ["festat Kosovë", "sq"], ["TikTok Kosovë", "sq"], ["influencer shqiptare", "sq"],
-  ["Pandora new collection", "en"], ["jewelry trends", "en"], ["jewelry TikTok viral", "en"],
+const NEWS = [ // Kosovo and Albania first; global TikTok/Pandora queries to spot trends that are coming
+  ["bizhuteri", "sq"], ["Pandora", "sq"], ["byzylyk", "sq"], ["gjerdan", "sq"], ["dhurata", "sq"], ["TikTok Kosovë", "sq"],
+  ["TikTok Shqipëri", "sq"], ["trend TikTok", "sq"], ["oferta Prishtinë", "sq"], ["festat Kosovë", "sq"], ["influencer shqiptare", "sq"],
+  ["TikTok trend jewelry", "en"], ["TikTok viral trend this week", "en"], ["TikTok trending sounds", "en"], ["Pandora charms trend", "en"],
+  ["Pandora necklace new", "en"], ["charm bracelet TikTok", "en"], ["jewelry trends 2027", "en"],
 ];
 const unxml = (t) => String(t ?? "").replace(/<!\[CDATA\[|\]\]>/g, "").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
 const tagOf = (x, t) => unxml(x.match(new RegExp(`<${t}[^>]*>([\\s\\S]*?)</${t}>`))?.[1]);
@@ -28,7 +29,7 @@ async function collectNews() {
   for (const [q, lang] of NEWS) {
     const ed = lang === "sq" ? "hl=sq&gl=AL&ceid=AL:sq" : "hl=en-US&gl=US&ceid=US:en";
     const x = await rss(`https://news.google.com/rss/search?q=${encodeURIComponent(q + " when:7d")}&${ed}`);
-    for (const it of (x.match(/<item>[\s\S]*?<\/item>/g) ?? []).slice(0, 8)) items.push({ q, title: tagOf(it, "title"), source: tagOf(it, "source"), date: tagOf(it, "pubDate").slice(0, 16) });
+    for (const it of (x.match(/<item>[\s\S]*?<\/item>/g) ?? []).slice(0, 7)) items.push({ q, title: tagOf(it, "title"), source: tagOf(it, "source"), date: tagOf(it, "pubDate").slice(0, 16) });
   }
   const trends = [];
   for (const geo of ["XK", "AL"]) { const t = await rss(`https://trends.google.com/trending/rss?geo=${geo}`); for (const it of (t.match(/<item>[\s\S]*?<\/item>/g) ?? []).slice(0, 20)) trends.push(`${geo === "XK" ? "Kosovë" : "Shqipëri"}: ${tagOf(it, "title")}`); }
