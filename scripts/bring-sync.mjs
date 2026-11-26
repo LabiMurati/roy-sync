@@ -261,7 +261,7 @@ async function main() {
   const since = val("--since") ? toDate(val("--since")) : new Date(Date.now() - 3 * 864e5);
   const { data: prods } = await db.from("products").select("name,product_variants(id,archived)").eq("org_id", orgId).eq("archived", false).limit(2000);
   const byName = new Map(); for (const p of prods ?? []) { const v = (p.product_variants ?? []).find((x) => !x.archived); if (v) byName.set(p.name.trim().toLowerCase(), v.id); }
-  const out = { created: 0, updated: 0, skipped: 0, failed: [] }; const createdNow = new Set();
+  const out = { created: 0, updated: 0, skipped: 0, failed: [] }; const createdNow = new Set(); const seenAt = new Map(), prevStatus = new Map();
   // BringPlus status + the time BringPlus set it (falls back to the older 2-argument function if the database isn't updated yet).
   async function setBring(orderId, p) {
     if (!globalThis.__noBSAt) {
@@ -277,6 +277,9 @@ async function main() {
     let { data: ex, error: xe } = globalThis.__noBS ? await sel("id,status") : await sel(globalThis.__noBSAt ? "id,status,bring_status" : "id,status,bring_status,bring_status_at");
     if (xe && /bring_status_at/.test(xe.message)) { globalThis.__noBSAt = true; ({ data: ex, error: xe } = await sel("id,status,bring_status")); }
     if (xe && /bring_status/.test(xe.message)) { globalThis.__noBS = true; ({ data: ex } = await sel("id,status")); }
+    // BringPlus shows no date for final statuses (dorëzuar, kthyer, refuzim...), so the time we first SEE a status is what counts.
+    if (ex && p.status) { const changed = !!ex.bring_status && ex.bring_status !== p.status; prevStatus.set(p.id, ex.bring_status ?? null);
+      seenAt.set(p.id, changed ? new Date() : (ex.bring_status_at ? new Date(ex.bring_status_at) : null)); }
     if (ex && !DRY && !globalThis.__noBS && p.status && (ex.bring_status !== p.status || (!globalThis.__noBSAt && !ex.bring_status_at))) {
       const { error: be } = await setBring(ex.id, p);
       if (be && !globalThis.__bsWarn) { globalThis.__bsWarn = true; console.log("Kujdes: statusi i BringPlus nuk u ruajt: " + be.message); }
@@ -345,9 +348,12 @@ async function main() {
   for (const p of parcels) {
     const who = `${p.id} · ${p.name}${p.city ? ", " + p.city : ""}`;
     const items = [];
-    const recent = p.statusDate && p.statusDate >= since;
+    const at = p.statusDate ?? seenAt.get(p.id) ?? null;
+    const recent = !!at && at >= since;
     if (createdNow.has(p.id)) items.push([`bring:${p.id}:new`, `Porosi e re: ${who}`, `${p.product} · ${p.total}€ · ${p.country}. U regjistrua te ROY OS.`, "info"]);
-    const deliveredRecent = p.deliveredDate ? p.deliveredDate >= since : recent;
+    // delivered: BringPlus' own delivery date if it shows one, else the moment we saw the parcel become delivered
+    const prev = prevStatus.get(p.id);
+    const deliveredRecent = p.deliveredDate ? p.deliveredDate >= since : recent && (p.status === "E dorëzuar" || (prev != null && !DONE.has(prev)));
     if (DONE.has(p.status) && deliveredRecent) items.push([`bring:${p.id}:s:dorezuar`, `Dorëzuar: ${who}`, `${p.product} · ${p.total}€ u dorëzua te klienti.`, "info"]);
     if (recent && /refuzuar/i.test(p.status)) items.push([`bring:${p.id}:s:refuzuar`, `Refuzuar: ${who}`, `Statusi: "${p.status}". ${p.product} · ${p.total}€. Telefoni: ${p.phone || "—"}.`, "critical"]);
     if (recent && p.status === "E kthyer") items.push([`bring:${p.id}:s:kthyer`, `Kthyer: ${who}`, "Dërgesa u kthye te ju sipas BringPlus. Kontrolloni porosinë.", "critical"]);
