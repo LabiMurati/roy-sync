@@ -1,6 +1,6 @@
 name: sync
 # Runs 24/7 without the Mac. GitHub's own schedule is unreliable (it skips runs),
-# so each run stays alive ~5.5 hours, syncing BringPlus every 5 minutes, and then
+# so each run stays alive ~5.5 hours, syncing BringPlus every 2 minutes, and then
 # starts the next run itself. The schedule below only revives the chain if it ever stops.
 on:
   schedule:
@@ -10,7 +10,8 @@ on:
     branches: [main]
 concurrency:
   group: sync
-  cancel-in-progress: false
+  # a new commit replaces the running sync at once; scheduled/self-started runs wait their turn
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 permissions:
   contents: read
   actions: write
@@ -25,15 +26,16 @@ jobs:
           node-version: 22
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
-      - name: Sync every 5 minutes for ~5.5 hours
+      - name: Sync every 2 minutes for ~5.5 hours
         env:
           ROY_CLOUD: ${{ secrets.ROY_CLOUD }}
         run: |
           end=$(( $(date +%s) + 330*60 ))
           while [ "$(date +%s)" -lt "$end" ]; do
             started=$(date +%s)
-            timeout 240 node scripts/bring-sync.mjs || echo "Sinkronizimi dështoi këtë herë; provohet sërish pas 5 minutash."
-            sleep $(( 300 - ( $(date +%s) - started ) > 0 ? 300 - ( $(date +%s) - started ) : 5 ))
+            git pull --ff-only -q 2>/dev/null || true   # pick up script fixes without restarting
+            timeout 240 node scripts/bring-sync.mjs || echo "Sinkronizimi dështoi këtë herë; provohet sërish pas 2 minutash."
+            sleep $(( 120 - ( $(date +%s) - started ) > 0 ? 120 - ( $(date +%s) - started ) : 5 ))
           done
       - name: Start the next run
         if: always()
