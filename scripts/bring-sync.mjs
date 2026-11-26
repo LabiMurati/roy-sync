@@ -172,22 +172,6 @@ async function history() {
   const db = createClient(url, anon, { auth: { persistSession: false } });
   const { error: le } = await db.auth.signInWithPassword({ email, password: pass }); if (le) throw new Error("Hyrja në ROY OS dështoi.");
   const { data: orgId } = await db.rpc("bootstrap_org"); if (!orgId) throw new Error("Nuk u gjet organizata.");
-  // Second Telegram chat for AI messages. The owner creates a group, adds the bot and writes /ai there; the sync links it once.
-  let aiChat = null;
-  try { const { data: st } = await db.from("organization_settings").select("telegram_ai_chat").eq("org_id", orgId).maybeSingle(); aiChat = st?.telegram_ai_chat || null; } catch {}
-  if (!aiChat && !DRY) { try { aiChat = await linkAiChat(); } catch {} }
-  const tgAI = (text) => tgSend(text, aiChat || undefined);
-  async function linkAiChat() {
-    const token = kc("tg_token"), ops = kc("tg_chat"); if (!token) return null;
-    const u = await fetch(`https://api.telegram.org/bot${token}/getUpdates?allowed_updates=${encodeURIComponent('["message","channel_post"]')}`).then((r) => r.json()).catch(() => null);
-    const hit = (u?.result ?? []).map((x) => x.message || x.channel_post).filter((m) => m && /^\/ai(@\w+)?\b/i.test(m.text || "") && String(m.chat?.id) !== String(ops)).pop();
-    if (!hit) return null;
-    const chat = String(hit.chat.id);
-    const { error } = await db.rpc("set_telegram_ai_chat", { p_org: orgId, p_chat: chat }); if (error) return null;
-    await tgSend("✅ Ky chat u lidh si kanali i AI i ROY JEWELRY OS.\nKëtu vijnë: plani i marketingut çdo të hënë (Instagram, Facebook, TikTok, buxheti), krahasimi i muajve më 1 të muajit dhe idetë e AI.", chat);
-    await tgSend("ℹ️ Mesazhet e AI tani shkojnë në chatin e ri. Këtu mbeten porositë, dërgesat, komentet dhe përmbledhja e mbrëmjes.");
-    return chat;
-  }
   const norm = (t) => (t ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
   const digits = (t) => String(t ?? "").replace(/\D/g, "").slice(-8);
   const { data: existing } = await db.from("orders").select("id,phone,customer_name,total,status,tracking_number,idempotency_key").eq("org_id", orgId).limit(5000);
@@ -275,6 +259,22 @@ async function main() {
     throw new Error("Hyrja në ROY OS dështoi (email/fjalëkalim). Nisni sërish për t'i shkruar.");
   }
   const { data: orgId } = await db.rpc("bootstrap_org"); if (!orgId) throw new Error("Nuk u gjet organizata.");
+  // Second Telegram chat for AI messages. The owner creates a group, adds the bot and writes /ai there; the sync links it once.
+  let aiChat = null;
+  try { const { data: st } = await db.from("organization_settings").select("telegram_ai_chat").eq("org_id", orgId).maybeSingle(); aiChat = st?.telegram_ai_chat || null; } catch {}
+  if (!aiChat && !DRY) { try { aiChat = await linkAiChat(); } catch {} }
+  const tgAI = (text) => tgSend(text, aiChat || undefined);
+  async function linkAiChat() {
+    const token = kc("tg_token"), ops = kc("tg_chat"); if (!token) return null;
+    const u = await fetch(`https://api.telegram.org/bot${token}/getUpdates?allowed_updates=${encodeURIComponent('["message","channel_post"]')}`).then((r) => r.json()).catch(() => null);
+    const hit = (u?.result ?? []).map((x) => x.message || x.channel_post).filter((m) => m && /^\/ai(@\w+)?\b/i.test(m.text || "") && String(m.chat?.id) !== String(ops)).pop();
+    if (!hit) return null;
+    const chat = String(hit.chat.id);
+    const { error } = await db.rpc("set_telegram_ai_chat", { p_org: orgId, p_chat: chat }); if (error) return null;
+    await tgSend("✅ Ky chat u lidh si kanali i AI i ROY JEWELRY OS.\nKëtu vijnë: plani i marketingut çdo të hënë (Instagram, Facebook, TikTok, buxheti), krahasimi i muajve më 1 të muajit dhe idetë e AI.", chat);
+    await tgSend("ℹ️ Mesazhet e AI tani shkojnë në chatin e ri. Këtu mbeten porositë, dërgesat, komentet dhe përmbledhja e mbrëmjes.");
+    return chat;
+  }
   const since = val("--since") ? toDate(val("--since")) : new Date(Date.now() - 3 * 864e5);
   const { data: prods } = await db.from("products").select("name,product_variants(id,archived)").eq("org_id", orgId).eq("archived", false).limit(2000);
   const byName = new Map(); for (const p of prods ?? []) { const v = (p.product_variants ?? []).find((x) => !x.archived); if (v) byName.set(p.name.trim().toLowerCase(), v.id); }
